@@ -9,5 +9,6 @@ namespace JWTAuthenticationOJT.Auth
 
         [Required(ErrorMessage = "Password is required")]
         public string? Password { get; set; }
+
     }
 }

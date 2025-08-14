@@ -6,5 +6,14 @@ namespace JWTAuthenticationOJT.Auth
     {
         public string? RefreshToken { get; set; }
         public DateTime RefreshTokenExpiryTime { get; set; }
+
+        public string? EmailVerificationCode { get; set; }
+        public bool IsEmailConfirmed { get; set; } = false;
+
+        public string? PasswordResetCode { get; set; }
+        public DateTime? PasswordResetCodeExpiry { get; set; }
+
+        public string? FcmToken { get; set; }
+
     }
 }
