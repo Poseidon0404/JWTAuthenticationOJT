@@ -69,7 +69,8 @@ namespace JWTAuthenticationOJT.Controllers
                 {
                     Token = new JwtSecurityTokenHandler().WriteToken(token),
                     RefreshToken = refreshToken,
-                    Expiration = token.ValidTo
+                    Expiration = token.ValidTo,
+                    Roles = userRoles 
                 });
             }
             return Unauthorized();
@@ -134,7 +135,8 @@ namespace JWTAuthenticationOJT.Controllers
                 Token = new JwtSecurityTokenHandler().WriteToken(token),
                 RefreshToken = refreshToken,
                 Expiration = token.ValidTo,
-                FcmToken = user.FcmToken
+                FcmToken = user.FcmToken,
+                Roles = new[] { UserRoles.User }
             });
         }
 
@@ -151,27 +153,22 @@ namespace JWTAuthenticationOJT.Controllers
             {
                 Email = model.Email,
                 SecurityStamp = Guid.NewGuid().ToString(),
-                UserName = model.Username
+                UserName = model.Username,
+                IsEmailConfirmed = true // admin can email bypass
             };
+
             var result = await _userManager.CreateAsync(user, model.Password);
             if (!result.Succeeded)
                 return StatusCode(StatusCodes.Status500InternalServerError, new Response { Status = "Error", Message = "User creation failed! Please check user details and try again." });
 
             if (!await _roleManager.RoleExistsAsync(UserRoles.Admin))
                 await _roleManager.CreateAsync(new IdentityRole(UserRoles.Admin));
-            if (!await _roleManager.RoleExistsAsync(UserRoles.User))
-                await _roleManager.CreateAsync(new IdentityRole(UserRoles.User));
 
-            if (await _roleManager.RoleExistsAsync(UserRoles.Admin))
-            {
-                await _userManager.AddToRoleAsync(user, UserRoles.Admin);
-            }
-            if (await _roleManager.RoleExistsAsync(UserRoles.Admin))
-            {
-                await _userManager.AddToRoleAsync(user, UserRoles.User);
-            }
-            return Ok(new Response { Status = "Success", Message = "User created successfully!" });
+            await _userManager.AddToRoleAsync(user, UserRoles.Admin);
+
+            return Ok(new Response { Status = "Success", Message = "Admin created successfully!" });
         }
+
 
         [HttpPost]
         [Route("verify-email")]
@@ -328,7 +325,6 @@ namespace JWTAuthenticationOJT.Controllers
             return Ok(new { Status = "Success", Message = "FCM token saved successfully." });
         }
 
-        [Authorize]
         [HttpGet]
         [Route("get-fcm-token/{username}")]
         public async Task<IActionResult> GetFcmToken(string username)
@@ -342,6 +338,44 @@ namespace JWTAuthenticationOJT.Controllers
 
             // Return the token
             return Ok(new { FcmToken = user.FcmToken });
+        }
+
+        [HttpPost]
+        [Route("assign-role")]
+        public async Task<IActionResult> AssignRole([FromBody] AssignRoleModel model)
+        {
+            var user = await _userManager.FindByNameAsync(model.Username);
+            if (user == null)
+                return NotFound("User not found.");
+
+            if (!await _roleManager.RoleExistsAsync(model.Role))
+                return BadRequest("Invalid role.");
+
+            var currentRoles = await _userManager.GetRolesAsync(user);
+            await _userManager.RemoveFromRolesAsync(user, currentRoles);
+
+            await _userManager.AddToRoleAsync(user, model.Role);
+
+            return Ok(new { Status = "Success", Message = $"Role '{model.Role}' assigned to user '{model.Username}'." });
+        }
+
+        [HttpGet("all-user-roles")]
+        public async Task<IActionResult> GetAllUserRoles()
+        {
+            var users = _userManager.Users.ToList();
+            var result = new List<object>();
+
+            foreach (var user in users)
+            {
+                var roles = await _userManager.GetRolesAsync(user);
+                result.Add(new
+                {
+                    Username = user.UserName,
+                    Roles = roles
+                });
+            }
+
+            return Ok(result);
         }
 
 

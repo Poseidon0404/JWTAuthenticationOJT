@@ -8,10 +8,9 @@ using System.Text;
 var builder = WebApplication.CreateBuilder(args);
 ConfigurationManager configuration = builder.Configuration;
 
-// Add services to the container.
-
 // For Entity Framework
-builder.Services.AddDbContext<ApplicationDbContext>(options => options.UseSqlServer(configuration.GetConnectionString("ConnStr")));
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    options.UseSqlServer(configuration.GetConnectionString("ConnStr")));
 
 // For Identity
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>()
@@ -25,7 +24,6 @@ builder.Services.AddAuthentication(options =>
     options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
     options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
 })
-
 // Adding Jwt Bearer
 .AddJwtBearer(options =>
 {
@@ -38,7 +36,6 @@ builder.Services.AddAuthentication(options =>
         ValidateLifetime = true,
         ValidateIssuerSigningKey = true,
         ClockSkew = TimeSpan.Zero,
-
         ValidAudience = configuration["JWT:ValidAudience"],
         ValidIssuer = configuration["JWT:ValidIssuer"],
         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["JWT:Secret"]))
@@ -46,11 +43,13 @@ builder.Services.AddAuthentication(options =>
 });
 
 builder.Services.AddControllers();
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
+
+// ? Seed Roles on Startup
+await SeedRolesAsync(app);
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -69,5 +68,17 @@ app.MapControllers();
 
 app.Run();
 
+static async Task SeedRolesAsync(IApplicationBuilder app)
+{
+    using var scope = app.ApplicationServices.CreateScope();
+    var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
 
-
+    string[] roles = { UserRoles.Admin, UserRoles.User };
+    foreach (var role in roles)
+    {
+        if (!await roleManager.RoleExistsAsync(role))
+        {
+            await roleManager.CreateAsync(new IdentityRole(role));
+        }
+    }
+}
