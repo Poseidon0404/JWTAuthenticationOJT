@@ -1,467 +1,80 @@
 ﻿using JWTAuthenticationOJT.Auth;
+using JWTAuthenticationOJT.ServicesInterfaces;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.IdentityModel.Tokens;
-using System.IdentityModel.Tokens.Jwt;
-using System.Net;
-using System.Net.Mail;
-using System.Numerics;
-using System.Security.Claims;
-using System.Security.Cryptography;
-using System.Text;
+using Microsoft.EntityFrameworkCore;
 using System.Threading.Tasks;
 
 namespace JWTAuthenticationOJT.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    public class AuthenticateController : Controller
+    public class AuthenticateController : ControllerBase
     {
-        private readonly UserManager<ApplicationUser> _userManager;
-        private readonly RoleManager<IdentityRole> _roleManager;
-        private readonly IConfiguration _configuration;
+        private readonly IAuthenticateService _authService;
 
-        public AuthenticateController(
-            UserManager<ApplicationUser> userManager,
-            RoleManager<IdentityRole> roleManager,
-            IConfiguration configuration)
+        public AuthenticateController(IAuthenticateService authService)
         {
-            _userManager = userManager;
-            _roleManager = roleManager;
-            _configuration = configuration;
+            _authService = authService;
         }
 
-        [HttpPost]
-        [Route("login")]
-        public async Task<IActionResult> Login([FromBody] LoginModel model)
-        {
-            var user = await _userManager.FindByNameAsync(model.Username);
-            if (user != null && await _userManager.CheckPasswordAsync(user, model.Password))
-            {
-                if (!user.IsEmailConfirmed)
-                    return Unauthorized("Email not verified. Please check your email for the verification code.");
+        [HttpPost("login")]
+        public async Task<IActionResult> Login(LoginModel model) =>
+            Ok(await _authService.LoginAsync(model));
 
-                var userRoles = await _userManager.GetRolesAsync(user);
+        [HttpPost("Biometriclogin")]
+        public async Task<IActionResult> Biometriclogin(BiometricLoginModel model) =>
+            Ok(await _authService.BiometricLoginAsync(model));
 
-                var authClaims = new List<Claim>
-                {
-                    new Claim(ClaimTypes.Name, user.UserName),
-                    new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-                };
+        [HttpPost("register")]
+        public async Task<IActionResult> Register(RegisterModel model) =>
+            Ok(await _authService.RegisterAsync(model));
 
-                foreach (var userRole in userRoles)
-                {
-                    authClaims.Add(new Claim(ClaimTypes.Role, userRole));
-                }
+        [HttpPost("register-admin")]
+        public async Task<IActionResult> RegisterAdmin(RegisterModel model) =>
+            Ok(await _authService.RegisterAdminAsync(model));
 
-                var token = CreateToken(authClaims);
-                var refreshToken = GenerateRefreshToken();
+        [HttpPost("verify-email")]
+        public async Task<IActionResult> VerifyEmail(EmailVerificationModel model) =>
+            Ok(await _authService.VerifyEmailAsync(model));
 
-                _ = int.TryParse(_configuration["JWT:RefreshTokenValidityInDays"], out int refreshTokenValidityInDays);
+        [HttpPost("request-password-reset")]
+        public async Task<IActionResult> RequestPasswordReset(PasswordResetRequestModel model) =>
+            Ok(await _authService.RequestPasswordResetAsync(model));
 
-                user.RefreshToken = refreshToken;
-                user.RefreshTokenExpiryTime = DateTime.Now.AddDays(refreshTokenValidityInDays);
+        [HttpPost("reset-password")]
+        public async Task<IActionResult> ResetPassword(PasswordResetModel model) =>
+            Ok(await _authService.ResetPasswordAsync(model));
 
-                await _userManager.UpdateAsync(user);
-
-                return Ok(new
-                {
-                    Token = new JwtSecurityTokenHandler().WriteToken(token),
-                    RefreshToken = refreshToken,
-                    Expiration = token.ValidTo,
-                    Roles = userRoles 
-                });
-            }
-            return Unauthorized();
-        }
-
-        [HttpPost]
-        [Route("register")]
-        public async Task<IActionResult> Register([FromBody] RegisterModel model)
-        {
-            var userExists = await _userManager.FindByNameAsync(model.Username);
-            if (userExists != null)
-                return StatusCode(StatusCodes.Status500InternalServerError,
-                    new Response { Status = "Error", Message = "User already exists!" });
-
-            ApplicationUser user = new()
-            {
-                Email = model.Email,
-                SecurityStamp = Guid.NewGuid().ToString(),
-                UserName = model.Username
-            };
-
-            var result = await _userManager.CreateAsync(user, model.Password);
-            if (!result.Succeeded)
-                return StatusCode(StatusCodes.Status500InternalServerError,
-                    new Response { Status = "Error", Message = "User creation failed! Please check user details and try again." });
-
-            var verificationCode = new Random().Next(1000, 9999).ToString();
-            user.EmailVerificationCode = verificationCode;
-            user.IsEmailConfirmed = false;
-
-            // ✅ Generate random FCM token for the user
-            user.FcmToken = Guid.NewGuid().ToString("N");
-
-            await _userManager.UpdateAsync(user);
-            await SendEmailAsync(user.Email, "Email Verification Code", $"{verificationCode}");
-
-            // ✅ Auto-generate JWT + refresh token
-            var userRoles = await _userManager.GetRolesAsync(user);
-            var authClaims = new List<Claim>
-    {
-        new Claim(ClaimTypes.Name, user.UserName),
-        new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-    };
-            foreach (var userRole in userRoles)
-            {
-                authClaims.Add(new Claim(ClaimTypes.Role, userRole));
-            }
-
-            var token = CreateToken(authClaims);
-            var refreshToken = GenerateRefreshToken();
-            _ = int.TryParse(_configuration["JWT:RefreshTokenValidityInDays"], out int refreshTokenValidityInDays);
-
-            user.RefreshToken = refreshToken;
-            user.RefreshTokenExpiryTime = DateTime.Now.AddDays(refreshTokenValidityInDays);
-            await _userManager.UpdateAsync(user);
-
-            // ✅ Return response with generated FCM token
-            return Ok(new
-            {
-                Status = "Success",
-                Message = "User created successfully! Please check your email for the verification code.",
-                Token = new JwtSecurityTokenHandler().WriteToken(token),
-                RefreshToken = refreshToken,
-                Expiration = token.ValidTo,
-                FcmToken = user.FcmToken,
-                Roles = new[] { UserRoles.User }
-            });
-        }
-
-
-        [HttpPost]
-        [Route("register-admin")]
-        public async Task<IActionResult> RegisterAdmin([FromBody] RegisterModel model)
-        {
-            var userExists = await _userManager.FindByNameAsync(model.Username);
-            if (userExists != null)
-                return StatusCode(StatusCodes.Status500InternalServerError, new Response { Status = "Error", Message = "User already exists!" });
-
-            ApplicationUser user = new()
-            {
-                Email = model.Email,
-                SecurityStamp = Guid.NewGuid().ToString(),
-                UserName = model.Username,
-                IsEmailConfirmed = true // admin can email bypass
-            };
-
-            var result = await _userManager.CreateAsync(user, model.Password);
-            if (!result.Succeeded)
-                return StatusCode(StatusCodes.Status500InternalServerError, new Response { Status = "Error", Message = "User creation failed! Please check user details and try again." });
-
-            if (!await _roleManager.RoleExistsAsync(UserRoles.Admin))
-                await _roleManager.CreateAsync(new IdentityRole(UserRoles.Admin));
-
-            await _userManager.AddToRoleAsync(user, UserRoles.Admin);
-
-            return Ok(new Response { Status = "Success", Message = "Admin created successfully!" });
-        }
-
-
-        [HttpPost]
-        [Route("verify-email")]
-        public async Task<IActionResult> VerifyEmail([FromBody] EmailVerificationModel model)
-        {
-            var user = await _userManager.FindByNameAsync(model.Username);
-            if (user == null) return BadRequest("User not found");
-            if (user.IsEmailConfirmed) return BadRequest("Email already verified");
-
-            if (user.EmailVerificationCode == model.Code)
-            {
-                user.IsEmailConfirmed = true;
-                user.EmailVerificationCode = null;
-                await _userManager.UpdateAsync(user);
-                return Ok("Email verified successfully.");
-            }
-
-            return BadRequest("Invalid verification code.");
-        }
-
-        [HttpPost]
-        [Route("request-password-reset")]
-        public async Task<IActionResult> RequestPasswordReset([FromBody] PasswordResetRequestModel model)
-        {
-            var user = await _userManager.FindByEmailAsync(model.Email);
-            if (user == null)
-                return BadRequest("User not found");
-
-            var resetCode = new Random().Next(1000, 9999).ToString();
-            user.PasswordResetCode = resetCode;
-            user.PasswordResetCodeExpiry = DateTime.UtcNow.AddMinutes(10); // Valid for 10 minutes
-            await _userManager.UpdateAsync(user);
-
-            await SendEmailAsync(user.Email, "Password Reset Code", $"{resetCode}");
-
-            return Ok("Password reset code sent to your email.");
-        }
-
-        [HttpPost]
-        [Route("reset-password")]
-        public async Task<IActionResult> ResetPassword([FromBody] PasswordResetModel model)
-        {
-            var user = await _userManager.FindByEmailAsync(model.Email);
-            if (user == null) return BadRequest("User not found");
-
-            if (user.PasswordResetCode != model.Code || user.PasswordResetCodeExpiry < DateTime.UtcNow)
-                return BadRequest("Invalid or expired reset code.");
-
-            var token = await _userManager.GeneratePasswordResetTokenAsync(user);
-            var result = await _userManager.ResetPasswordAsync(user, token, model.NewPassword);
-
-            if (!result.Succeeded)
-                return BadRequest("Password reset failed.");
-
-            // Clear code
-            user.PasswordResetCode = null;
-            user.PasswordResetCodeExpiry = null;
-            await _userManager.UpdateAsync(user);
-
-            return Ok("Password has been reset successfully.");
-        }
-
-
-
-        [HttpPost]
-        [Route("refresh-token")]
-        public async Task<IActionResult> RefreshToken(TokenModel tokenModel)
-        {
-            if (tokenModel is null)
-            {
-                return BadRequest("Invalid client request");
-            }
-
-            string? accessToken = tokenModel.AccessToken;
-            string? refreshToken = tokenModel.RefreshToken;
-
-            var principal = GetPrincipalFromExpiredToken(accessToken);
-            if (principal == null)
-            {
-                return BadRequest("Invalid access token or refresh token");
-            }
-
-#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
-#pragma warning disable CS8602 // Dereference of a possibly null reference.
-            string username = principal.Identity.Name;
-#pragma warning restore CS8602 // Dereference of a possibly null reference.
-#pragma warning restore CS8600 // Converting null literal or possible null value to non-nullable type.
-
-            var user = await _userManager.FindByNameAsync(username);
-
-            if (user == null || user.RefreshToken != refreshToken || user.RefreshTokenExpiryTime <= DateTime.Now)
-            {
-                return BadRequest("Invalid access token or refresh token");
-            }
-
-            var newAccessToken = CreateToken(principal.Claims.ToList());
-            var newRefreshToken = GenerateRefreshToken();
-
-            user.RefreshToken = newRefreshToken;
-            await _userManager.UpdateAsync(user);
-
-            return new ObjectResult(new
-            {
-                accessToken = new JwtSecurityTokenHandler().WriteToken(newAccessToken),
-                refreshToken = newRefreshToken
-            });
-        }
+        [HttpPost("refresh-token")]
+        public async Task<IActionResult> RefreshToken(TokenModel tokenModel) =>
+            Ok(await _authService.RefreshTokenAsync(tokenModel));
 
         [Authorize]
-        [HttpPost]
-        [Route("revoke/{username}")]
-        public async Task<IActionResult> Revoke(string username)
-        {
-            var user = await _userManager.FindByNameAsync(username);
-            if (user == null) return BadRequest("Invalid user name");
-
-            user.RefreshToken = null;
-            await _userManager.UpdateAsync(user);
-
-            return NoContent();
-        }
+        [HttpPost("revoke/{username}")]
+        public async Task<IActionResult> Revoke(string username) =>
+            Ok(await _authService.RevokeAsync(username));
 
         [Authorize]
-        [HttpPost]
-        [Route("revoke-all")]
-        public async Task<IActionResult> RevokeAll()
-        {
-            var users = _userManager.Users.ToList();
-            foreach (var user in users)
-            {
-                user.RefreshToken = null;
-                await _userManager.UpdateAsync(user);
-            }
-
-            return NoContent();
-        }
+        [HttpPost("revoke-all")]
+        public async Task<IActionResult> RevokeAll() =>
+            Ok(await _authService.RevokeAllAsync());
 
         [Authorize]
-        [HttpPost]
-        [Route("save-fcm-token")]
-        public async Task<IActionResult> SaveFcmToken([FromBody] SaveFcmTokenModel model)
-        {
-            var username = User.Identity?.Name;
-            if (string.IsNullOrEmpty(username))
-                return Unauthorized("User not found in token.");
+        [HttpPost("save-fcm-token")]
+        public async Task<IActionResult> SaveFcmToken(SaveFcmTokenModel model) =>
+            Ok(await _authService.SaveFcmTokenAsync(User.Identity.Name, model));
 
-            var user = await _userManager.FindByNameAsync(username);
-            if (user == null)
-                return NotFound("User not found.");
+        [HttpGet("get-fcm-token/{username}")]
+        public async Task<IActionResult> GetFcmToken(string username) =>
+            Ok(await _authService.GetFcmTokenAsync(username));
 
-            user.FcmToken = model.FcmToken;
-            await _userManager.UpdateAsync(user);
-
-            return Ok(new { Status = "Success", Message = "FCM token saved successfully." });
-        }
-
-        [HttpGet]
-        [Route("get-fcm-token/{username}")]
-        public async Task<IActionResult> GetFcmToken(string username)
-        {
-            if (string.IsNullOrEmpty(username))
-                return BadRequest("Username is required.");
-
-            var user = await _userManager.FindByNameAsync(username);
-            if (user == null)
-                return NotFound("User not found.");
-
-            // Return the token
-            return Ok(new { FcmToken = user.FcmToken });
-        }
-
-        [HttpPost]
-        [Route("assign-role")]
-        public async Task<IActionResult> AssignRole([FromBody] AssignRoleModel model)
-        {
-            var user = await _userManager.FindByNameAsync(model.Username);
-            if (user == null)
-                return NotFound("User not found.");
-
-            if (!await _roleManager.RoleExistsAsync(model.Role))
-                return BadRequest("Invalid role.");
-
-            var currentRoles = await _userManager.GetRolesAsync(user);
-            await _userManager.RemoveFromRolesAsync(user, currentRoles);
-
-            await _userManager.AddToRoleAsync(user, model.Role);
-
-            return Ok(new { Status = "Success", Message = $"Role '{model.Role}' assigned to user '{model.Username}'." });
-        }
+        [HttpPost("assign-role")]
+        public async Task<IActionResult> AssignRole(AssignRoleModel model) =>
+            Ok(await _authService.AssignRoleAsync(model));
 
         [HttpGet("all-user-roles")]
-        public async Task<IActionResult> GetAllUserRoles()
-        {
-            var users = _userManager.Users.ToList();
-            var result = new List<object>();
-
-            foreach (var user in users)
-            {
-                var roles = await _userManager.GetRolesAsync(user);
-                result.Add(new
-                {
-                    Username = user.UserName,
-                    Roles = roles
-                });
-            }
-
-            return Ok(result);
-        }
-
-
-        private JwtSecurityToken CreateToken(List<Claim> authClaims)
-        {
-            var authSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["JWT:Secret"]));
-            _ = int.TryParse(_configuration["JWT:TokenValidityInMinutes"], out int tokenValidityInMinutes);
-
-            var token = new JwtSecurityToken(
-                issuer: _configuration["JWT:ValidIssuer"],
-                audience: _configuration["JWT:ValidAudience"],
-                expires: DateTime.Now.AddMinutes(tokenValidityInMinutes),
-                claims: authClaims,
-                signingCredentials: new SigningCredentials(authSigningKey, SecurityAlgorithms.HmacSha256)
-                );
-
-            return token;
-        }
-
-        private static string GenerateRefreshToken()
-        {
-            var randomNumber = new byte[64];
-            using var rng = RandomNumberGenerator.Create();
-            rng.GetBytes(randomNumber);
-            return Convert.ToBase64String(randomNumber);
-        }
-
-        private ClaimsPrincipal? GetPrincipalFromExpiredToken(string? token)
-        {
-            var tokenValidationParameters = new TokenValidationParameters
-            {
-                ValidateAudience = false,
-                ValidateIssuer = false,
-                ValidateIssuerSigningKey = true,
-                IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["JWT:Secret"])),
-                ValidateLifetime = false
-            };
-
-            var tokenHandler = new JwtSecurityTokenHandler();
-            var principal = tokenHandler.ValidateToken(token, tokenValidationParameters, out SecurityToken securityToken);
-            if (securityToken is not JwtSecurityToken jwtSecurityToken || !jwtSecurityToken.Header.Alg.Equals(SecurityAlgorithms.HmacSha256, StringComparison.InvariantCultureIgnoreCase))
-                throw new SecurityTokenException("Invalid token");
-
-            return principal;
-
-        }
-        private async Task SendEmailAsync(string toEmail, string subject, string code)
-        {
-            var smtpClient = new SmtpClient("smtp.gmail.com")
-            {
-                Port = 587,
-                Credentials = new NetworkCredential("nextgenmobileflutter@gmail.com", "yhxu umnd tauy gfuq"),
-                EnableSsl = true
-            };
-
-            string messageBody = $@"
-             <html>
-             <body style='font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px;'>
-               <div style='max-width: 500px; margin: auto; background-color: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);'>
-                  <div style='text-align: center;'>
-                    <img src='https://i.postimg.cc/h4MXLWqF/logo.png' alt='NextGen Logo' style='max-width: 120px; margin-bottom: 20px;' />
-                    <h2 style='color: #333;'>WELCOME TO FLUTTER NEXTGEN</h2>
-                    <p style='color: #555;'>Hello,</p>
-                    <p style='color: #555;'>Your verification code for NextGen is:</p>
-                    <div style='font-size: 28px; font-weight: bold; letter-spacing: 4px; color: white; background-color: #4CAF50; padding: 10px 20px; border-radius: 6px; display: inline-block; margin: 15px 0;'>
-                    {code}
-                  </div>
-                   <p style='color: #555;'>Please enter this code to continue.</p>
-                   <p style='color: #777; font-size: 12px;'>If you didn’t request this, you can safely ignore this email.</p>
-                  </div>
-                </div>
-             </body>
-             </html>";
-
-            var mailMessage = new MailMessage
-            {
-                From = new MailAddress("nextgenmobileflutter@gmail.com", "NextGen Flutter"),
-                Subject = subject,
-                Body = messageBody,
-                IsBodyHtml = true, 
-            };
-
-            mailMessage.To.Add(toEmail);
-
-            await smtpClient.SendMailAsync(mailMessage);
-        }
-
+        public async Task<IActionResult> GetAllUserRoles() =>
+            Ok(await _authService.GetAllUserRolesAsync());
     }
 }

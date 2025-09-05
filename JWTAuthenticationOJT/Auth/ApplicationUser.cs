@@ -4,6 +4,10 @@ namespace JWTAuthenticationOJT.Auth
 {
     public class ApplicationUser : IdentityUser
     {
+        public bool UseFingerprint { get; set; } = false;
+        public bool UseFaceId { get; set; } = false;
+        public string? BiometricType { get; set; }
+
         public string? RefreshToken { get; set; }
         public DateTime RefreshTokenExpiryTime { get; set; }
 
@@ -14,6 +18,7 @@ namespace JWTAuthenticationOJT.Auth
         public DateTime? PasswordResetCodeExpiry { get; set; }
 
         public string? FcmToken { get; set; }
+
 
     }
 }

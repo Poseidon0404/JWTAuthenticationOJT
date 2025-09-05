@@ -1,4 +1,6 @@
 using JWTAuthenticationOJT.Auth;
+using JWTAuthenticationOJT.Services.Implementation;
+using JWTAuthenticationOJT.ServicesInterfaces;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -45,6 +47,8 @@ builder.Services.AddAuthentication(options =>
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+builder.Services.AddScoped<IAuthenticateService, AuthenticateService>();
 
 var app = builder.Build();
 
